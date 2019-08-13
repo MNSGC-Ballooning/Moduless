@@ -35,7 +35,10 @@ String GPStime;
 String GPSlocation;
 
 File datalog;
-char filename[] = "LESSLOG04.csv";
+char filename[] = "LESS00.csv";
+bool SDactive = false;
+
+bool startRead = false;
 
 void setup() {
   XBee_Serial.begin(9600);
@@ -44,10 +47,31 @@ void setup() {
   xBee.atCommand("ATMY1");
   xBee.exitATmode();
 
-  datalog = SD.open(filename, FILE_WRITE);
-  datalog.println("Beginning data recording.");
-  datalog.close();
-
+  Serial.print("Initializing SD card...");
+  if(!SD.begin(chipSelect))                                 //attempt to start SD communication
+    Serial.println("Card failed, or not present");          //print out error if failed; remind user to check card
+  else {                                                    //if successful, attempt to create file
+    Serial.println("Card initialized.\nCreating File...");
+    for (byte i = 0; i < 100; i++) {                        //can create up to 100 files with similar names, but numbered differently
+      filename[4] = '0' + i/10;
+      filename[5] = '0' + i%10;
+      if (!SD.exists(filename)) {                           //if a given filename doesn't exist, it's available
+        datalog = SD.open(filename, FILE_WRITE);            //create file with that name
+        SDactive = true;                                    //activate SD logging since file creation was successful
+        Serial.println("Logging to: " + String(filename));  //Tell user which file contains the data for this run of the program
+       // xBee.println("Logging to: " + String(filename));
+        break;                                              //Exit the for loop now that we have a file
+      }
+    }
+    if (!SDactive) Serial.println("No available file names; clear SD card to enable logging");
+  }
+  if(SDactive)
+  {
+    datalog.println("Beginning data recording.");
+    datalog.println("Time,Temperature (C),Solar Temperature (C),Pressure (atm),Temperature(F),Number of Satellites,Latitude,Longitude,Altitude (m),Photoresistor,Switch");
+    datalog.close();
+  }
+  
   Wire.begin();         //Begin I2C communication on the 0 pins
 
   Serial.begin(9600);     //start Serial communication
@@ -65,41 +89,45 @@ void setup() {
   if(gps.setAirborne())
   {
     Serial.println("Air mode successfully set.");
-    xBee.println("Air mode successfully set.");
+   // xBee.println("Air mode successfully set.");
   }
   else
   {
     Serial.println("WARNING: Failed to set to air mode. Altitude data may be unreliable.");
-    xBee.println("WARNING: Failed to set to air mode. Altitude data may be unreliable.");
+   // xBee.println("WARNING: Failed to set to air mode. Altitude data may be unreliable.");
   }
   
-  pinMode(A0, INPUT);
-  pinMode(A2, INPUT);
+  //pinMode(A0, INPUT);
+  //pinMode(A2, INPUT);
   
   Serial.print("Deez ");
   delay(2500);
   Serial.println("nutz");
-  xBee.println("Deez nutz");
+ // xBee.println("Starting data acquisition");
 }
 
 void saveAll()
 {
+  String saveData = GPStime + "," + String(Temp) + "," + String(solarTemp) + "," + String(pressure) + "," + String(temp) + "," + String(gps.getSats()) + "," + String(gps.getLat(),10) + "," + String(gps.getLon(),10) + "," + String(gps.getAlt_meters()) + "," + String(analogRead(A0)) + "," + String(analogRead(A2));
   datalog = SD.open(filename, FILE_WRITE);
-  datalog.println("Temp (C): " + String(Temp));
-  datalog.println("Temp (C): (SOLAR)" + String(solarTemp));
-  datalog.println("Pressure (atm): " + String(pressure) + "  Temp (F): " + String(temp));
+  /*datalog.println(String(Temp));
+  datalog.println(String(solarTemp));
+  datalog.println(String(pressure));
+  datalog.println(String(temp));
   datalog.println(GPStime);
   datalog.println(GPSlocation);
+  datalog.println(String(gps.getAlt_meters()));*/
+  datalog.println(saveData);
   datalog.close();
 }
 
 void sendAll()
 {
-  xBee.println("Temp (C): " + String(Temp));
-  xBee.println("Temp (C): (SOLAR)" + String(solarTemp));
-  xBee.println("Pressure (atm): " + String(pressure) + "  Temp (F): " + String(temp));
-  xBee.println(GPStime);
-  xBee.println(GPSlocation);
+  xBee.println("Less: Temp (C): " + String(Temp) + " Temp (C): (SOLAR)" + String(solarTemp) + "Pressure (atm): " + String(pressure) + " Temp (F): " + String(temp) + GPStime + GPSlocation);
+//  xBee.println("Temp (C): (SOLAR)" + String(solarTemp));
+//  xBee.println("Pressure (atm): " + String(pressure) + "  Temp (F): " + String(temp));
+//  xBee.println(GPStime);
+//  xBee.println(GPSlocation);
 }
 
 void loop() {
@@ -113,10 +141,15 @@ void loop() {
   pressure = sensor.readPressure()/101325;   // for altimeter/pressure sensor
   temp = sensor.readTempF();            // for altimeter/pressure sensor
 
-  //Serial.println(analogRead(A0));
-  //Serial.println("Switch " + String(analogRead(A2)));
+  Serial.println(analogRead(A0));
+  Serial.println("Switch " + String(analogRead(A2)));
+
+  if(analogRead(A2) > 900)
+  {
+    startRead = true;
+  }
   
-  if( nextSendTime < millis() && analogRead(A2) < 200 && analogRead(A0) > 250)
+  if( nextSendTime < millis() && startRead && analogRead(A0) > 150)
   {
     Serial.println("Temp (C): " + String(Temp));
     Serial.println("Temp (C): (SOLAR)" + String(solarTemp));
@@ -128,12 +161,6 @@ void loop() {
     GPStime = String(gps.getHour()-5) + ":" + String(gps.getMinute()) + ":" + String(gps.getSecond());
     GPSlocation = "Number of Satellites " + String(gps.getSats()) + " Lat/Lon: " + String(gps.getLat(),10) + "/" + String(gps.getLon(),10) + " Alt(m): " + String(gps.getAlt_meters());
     
-    /*Serial.print(gps.getYear());                ///< [year], Year (UTC)
-    Serial.print("\t");
-    Serial.print(gps.getMonth());               ///< [month], Month, range 1..12 (UTC)
-    Serial.print("\t");
-    Serial.print(gps.getDay());                 ///< [day], Day of month, range 1..31 (UTC)
-    Serial.print("\t");*/
     Serial.print(gps.getHour()-5);                ///< [hour], Hour of day, range 0..23 (UTC)
     Serial.print(":");
     Serial.print(gps.getMinute());                 ///< [min], Minute of hour, range 0..59 (UTC)
@@ -156,9 +183,11 @@ void loop() {
     
     nextSendTime = millis() + 10000L;
   }
-  if(nextSaveTime < millis())
+  if(nextSaveTime < millis() && startRead)
   {
     saveAll();
+    Serial.println("Saved");
+    Serial.println();
     nextSaveTime = millis() + 1000L;
   }
 }
